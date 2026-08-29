@@ -483,7 +483,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
         if modality not in segmented_by_modality:
             continue
 
-        df = segmented_by_modality[modality].copy()
+        df = updated.get(modality, segmented_by_modality[modality]).copy()
 
         if cfg["value_col"] not in df.columns:
             print(f"Skipping {cfg['title']}: missing column {cfg['value_col']}")

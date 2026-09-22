@@ -1,0 +1,17 @@
+# Raw and intermediate experiment data lives in Google Drive, not here.
+# Everything below is regenerable by running the pipeline.
+ally_pupil/
+ally_results/
+segmented_output*/
+individual_trials/
+normalized_trials/
+combined_normalized_trials/
+*_segmented_trials.csv
+eeg_full_*.csv
+pupil_response_full_*.csv
+hr_rr_*.csv
+stim_trains_*.csv
+.DS_Store
+__pycache__/
+*.pyc
+.venv/

@@ -51,7 +51,15 @@ from statsmodels.stats.multitest import multipletests
 import statsmodels.formula.api as smf
 
 from derived_metrics import METRIC_BY_KEY
+from quality_control import MIN_TRIALS_PER_CELL
 
+
+# The stimulus itself is visible in the raw EEG as a saturating oscillation for the whole
+# 1 s train (see noise_screening.py output). Anything computed from the EEG inside that
+# window measures the stimulator, not the brain, so the EEG metrics are blanked over it.
+# The other metrics are sampled at 10 Hz from physiological sensors and are unaffected.
+ARTEFACT_BLANK_S = 1.5
+ARTEFACT_METRICS = ("eeg_rel_delta", "eeg_bsr")
 
 PEAK_WINDOW_S = (0.0, 30.0)
 EARLY_WINDOW_S = (0.0, 10.0)
@@ -101,10 +109,22 @@ def trial_features(curve: pd.DataFrame) -> dict[str, float]:
 
 
 def build_features(curves: pd.DataFrame) -> pd.DataFrame:
+    # Same inclusion rule as the curves: a cell needs MIN_TRIALS_PER_CELL good trials or it
+    # is not analysed at all. Without this the statistics would silently include a mouse
+    # represented by a single trial while the figures excluded it, and the two would
+    # disagree about n.
+    counts = curves.groupby(["mouse", "anes", "nominal_frequency_hz", "metric"])["trial_id"]
+    curves = curves[counts.transform("nunique") >= MIN_TRIALS_PER_CELL]
+
     rows = []
 
     keys = ["recording", "mouse", "anes", "trial_id", "nominal_frequency_hz", "metric"]
     for key_values, curve in curves.sort_values("time_from_stim").groupby(keys):
+        metric = key_values[keys.index("metric")]
+        if metric in ARTEFACT_METRICS:
+            curve = curve[(curve["time_from_stim"] < 0) |
+                          (curve["time_from_stim"] >= ARTEFACT_BLANK_S)]
+
         computed = trial_features(curve)
         if not computed:
             continue

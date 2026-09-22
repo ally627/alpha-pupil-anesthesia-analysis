@@ -61,14 +61,16 @@ def calculate_summary(data):
         )
     )
 
-    summary["group_sd"] = summary["group_sd"].fillna(0)
-
+    # group_sd stays NaN for a single-mouse cell. matplotlib simply draws no whisker for
+    # NaN, which is the honest rendering; filling it with 0 drew a confident zero-length
+    # error bar on the least certain bar in the figure. See issue #6.
     return per_mouse, summary
 
 
 def calculate_common_y_limits(summary):
-    lower = (summary["group_mean"] - summary["group_sd"]).min()
-    upper = (summary["group_mean"] + summary["group_sd"]).max()
+    sd = summary["group_sd"].fillna(0)
+    lower = (summary["group_mean"] - sd).min()
+    upper = (summary["group_mean"] + sd).max()
 
     lower = min(lower, 0)
     upper = max(upper, 0)
@@ -100,7 +102,10 @@ def make_bar_plot(summary, anes, frequency, y_limits):
         )
         return
 
-    labels = [METRIC_LABELS[m] for m in selected["metric"]]
+    labels = [
+        f"{METRIC_LABELS[m]}\n(n={int(n)})"
+        for m, n in zip(selected["metric"], selected["n_mice"])
+    ]
     colors = [METRIC_COLORS[m] for m in selected["metric"]]
 
     plt.figure(figsize=(9, 6))
@@ -119,9 +124,15 @@ def make_bar_plot(summary, anes, frequency, y_limits):
     plt.ylim(y_limits)
 
     plt.ylabel("Mean change from baseline, 0–10 s (%)")
+
+    # n is whatever survived quality control in this condition, which is not always 4.
+    n_by_metric = dict(zip(selected["metric"], selected["n_mice"].astype(int)))
+    n_values = sorted(set(n_by_metric.values()))
+    n_text = f"n={n_values[0]} mice" if len(n_values) == 1 else f"n={min(n_values)}–{max(n_values)} mice"
+
     plt.title(
         f"Physiological responses – {anes} anesthesia – "
-        f"{frequency} Hz – n=4 mice"
+        f"{frequency} Hz – {n_text}"
     )
 
     plt.xticks(rotation=15, ha="right")

@@ -20,6 +20,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from quality_control import (
+    MIN_TRIALS_PER_CELL,
+    annotate_stim_quality,
+    summarise_rejections,
+)
+
 
 DEFAULT_PRE_SECONDS = 10.0
 DEFAULT_POST_SECONDS = 60.0
@@ -56,7 +62,7 @@ def infer_recording_row(
     return matches.iloc[0]
 
 
-def prepare_stim_table(stim: pd.DataFrame) -> pd.DataFrame:
+def prepare_stim_table(stim: pd.DataFrame, nominal_duration_s: float | None = None) -> pd.DataFrame:
     required = {"stim_index", "start_time_s", "end_time_s"}
     missing = required - set(stim.columns)
     if missing:
@@ -70,10 +76,16 @@ def prepare_stim_table(stim: pd.DataFrame) -> pd.DataFrame:
 
     if "frequency" in stim.columns:
         stim = stim.rename(columns={"frequency": "actual_frequency_hz"})
-    if "pulse_count" in stim.columns:
-        stim["nominal_frequency_hz"] = np.where(stim["pulse_count"].astype(float) >= 80, 100, 40)
-    elif "actual_frequency_hz" in stim.columns:
-        stim["nominal_frequency_hz"] = np.where(stim["actual_frequency_hz"].astype(float) >= 70, 100, 40)
+
+    # The condition label comes from the rate actually delivered (pulses / duration),
+    # not from the pulse count alone: the stimulator sometimes spread the right number
+    # of pulses over the wrong interval, which makes a "100 Hz" train a real 42 Hz one.
+    stim = annotate_stim_quality(stim, nominal_duration_s=nominal_duration_s)
+
+    rejected = int((~stim["is_good_stim"]).sum())
+    if rejected:
+        by_reason = stim.loc[~stim["is_good_stim"], "reject_reason"].value_counts().to_dict()
+        print(f"Stimulus QC: rejected {rejected} of {len(stim)} trains {by_reason}")
 
     return stim.sort_values("stim_time").reset_index(drop=True)
 
@@ -97,7 +109,12 @@ def add_metadata_columns(
         "train_index",
         "pulse_count",
         "actual_frequency_hz",
+        "measured_frequency_hz",
         "nominal_frequency_hz",
+        "duration_ok",
+        "frequency_ok",
+        "is_good_stim",
+        "reject_reason",
     ]
     for col in stim_metadata_cols:
         if col in stim_row.index and col not in trial.columns:
@@ -275,6 +292,9 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
     mouse = get_meta_value("mouse", "unknown_mouse")
     anes = get_meta_value("anes", "unknown_anes")
 
+    # Cells dropped for having too few good trials; written out at the end.
+    excluded = []
+
     def safe_name(x):
         return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(x))
 
@@ -291,11 +311,18 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
         return None
 
     def add_good_stim_column(df):
+        # prepare_stim_table already decided this, per stimulus, using both the train
+        # duration and the rate actually delivered. Trust it when it is present.
+        if "is_good_stim" in df.columns:
+            df["is_good_stim"] = df["is_good_stim"].astype(bool)
+            return df
+
         duration_col = find_duration_col(df)
         if duration_col is None:
             df["is_good_stim"] = True
         else:
-            df["is_good_stim"] = df[duration_col].between(0.8, 1.1, inclusive="both")
+            nominal = float(pd.to_numeric(df[duration_col], errors="coerce").median())
+            df["is_good_stim"] = df[duration_col].between(nominal * 0.8, nominal * 1.2, inclusive="both")
         return df
 
     def add_percent_change(df, value_col, percent_col):
@@ -345,13 +372,32 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
 
             n_trials = pivot.drop(columns=["mean", "std"]).shape[1]
 
+            if n_trials < MIN_TRIALS_PER_CELL:
+                # One or two surviving trials is not an estimate. Write it aside so the
+                # exclusion is visible, and keep it out of the aggregation. See issue #12.
+                excluded.append(
+                    {
+                        "mouse": mouse,
+                        "anes": anes,
+                        "frequency_hz": frequency,
+                        "metric": modality_label,
+                        "n_trials": n_trials,
+                        "minimum_required": MIN_TRIALS_PER_CELL,
+                    }
+                )
+                print(
+                    f"Excluded cell {mouse} {anes} {frequency}Hz {modality_label}: "
+                    f"only {n_trials} good trial(s), minimum is {MIN_TRIALS_PER_CELL}"
+                )
+                continue
+
             out_name = (
                 f"{safe_name(mouse)}-{safe_name(anes)}-"
                 f"{frequency}Hz-{safe_name(modality_label)}-n{n_trials}.csv"
             )
             pivot.reset_index().to_csv(normalized_dir / out_name, index=False)
 
-    def plot_mean_only(df, percent_col, title, file_prefix):
+    def plot_mean_only(df, percent_col, title, file_prefix, y_axis_label="Change from baseline (%)"):
         good = df[df["is_good_stim"].astype(bool)].copy()
         good = good.dropna(subset=[percent_col, "time_from_stim", "nominal_frequency_hz"])
 
@@ -379,14 +425,14 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
         plt.axvline(0, linewidth=0.8, alpha=0.6)
         plt.xlim(-10, 60)
         plt.xlabel("Time from stimulus onset (s)")
-        plt.ylabel("Change from baseline (%)")
+        plt.ylabel(y_axis_label)
         plt.title(title)
         plt.legend()
         plt.tight_layout()
         plt.savefig(plots_dir / f"{safe_name(file_prefix)}_mean.png", dpi=200)
         plt.close()
 
-    def plot_individual_plus_mean(df, percent_col, title, file_prefix):
+    def plot_individual_plus_mean(df, percent_col, title, file_prefix, y_axis_label="Change from baseline (%)"):
         trial_col = find_trial_col(df)
 
         good = df[df["is_good_stim"].astype(bool)].copy()
@@ -425,7 +471,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
         plt.axvline(0, linewidth=0.8, alpha=0.6)
         plt.xlim(-10, 60)
         plt.xlabel("Time from stimulus onset (s)")
-        plt.ylabel("Change from baseline (%)")
+        plt.ylabel(y_axis_label)
         plt.title(title)
         plt.legend()
         plt.tight_layout()
@@ -440,6 +486,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
             "percent_col": "rel_delta_percent_change_from_baseline",
             "label": "eeg_rel_delta",
             "title": "EEG rel_delta",
+            "y_axis_label": "Change from baseline (%)",
         },
         {
             "modality": "eeg",
@@ -448,6 +495,8 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
             "percent_col": "supp_mask_probability",
             "label": "eeg_supp_mask",
             "title": "EEG supp_mask probability",
+            # Not a percent change: supp_mask is a raw 0-1 probability. See issue #3.
+            "y_axis_label": "Suppression probability (0-1)",
         },
         {
             "modality": "pupil",
@@ -456,6 +505,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
             "percent_col": "diameter_mm_percent_change_from_baseline",
             "label": "pupil_diameter_mm",
             "title": "Pupil diameter",
+            "y_axis_label": "Change from baseline (%)",
         },
         {
             "modality": "hr_rr",
@@ -464,6 +514,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
             "percent_col": "hr_bpm_percent_change_from_baseline",
             "label": "heart_rate_hr_bpm",
             "title": "Heart rate",
+            "y_axis_label": "Change from baseline (%)",
         },
         {
             "modality": "hr_rr",
@@ -472,6 +523,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
             "percent_col": "resp_bpm_percent_change_from_baseline",
             "label": "respiration_resp_bpm",
             "title": "Respiration rate",
+            "y_axis_label": "Change from baseline (%)",
         },
     ]
 
@@ -506,6 +558,7 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
             percent_col=cfg["percent_col"],
             title=f"{cfg['title']} - {mouse} {anes}",
             file_prefix=cfg["label"],
+            y_axis_label=cfg.get("y_axis_label", "Change from baseline (%)"),
         )
 
         plot_individual_plus_mean(
@@ -523,59 +576,25 @@ def generate_plots(output_dir, segmented_by_modality, recording_row=None):
         elif modality == "eeg":
             df.to_csv(output_dir / "eeg_segmented_trials.csv", index=False)
 
+    if excluded:
+        pd.DataFrame(excluded).to_csv(output_dir / "excluded_cells.csv", index=False)
+        print(f"Excluded {len(excluded)} cell(s) with fewer than {MIN_TRIALS_PER_CELL} good trials")
+
     print(f"Saved plots in: {plots_dir}")
     print(f"Saved normalized trial tables in: {normalized_dir}")
-def run_one_recording(folder, mouse, anes, recording, stim_path, pupil_path, hr_rr_path, eeg_path):
-    import pandas as pd
 
-    recording_row = pd.Series({
-        "mouse": mouse,
-        "anes": anes,
-        "filename": recording,
-    })
 
-    output_dir = folder / f"segmented_output_{mouse}_{anes}_{recording.split('pupil_anesthesia-')[-1]}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    stim = prepare_stim_table(read_csv(stim_path))
-    stim.to_csv(output_dir / "stim_metadata.csv", index=False)
-
-    recording_row.to_frame().T.to_csv(output_dir / "recording_metadata.csv", index=False)
-
-    reports = []
-    segmented_by_modality = {}
-
-    for modality, path in [("pupil", pupil_path), ("hr_rr", hr_rr_path), ("eeg", eeg_path)]:
-        if path is None:
-            print(f"{modality}: skipped because file is missing")
-            continue
-            segmented, report = extract_windows(
-            data=read_csv(path),
-            stim=stim,
-            recording_row=recording_row,
-            modality=modality,
-            pre_seconds=10,
-            post_seconds=60,
-        )
-
-        save_outputs(
-            output_dir=output_dir,
-            modality=modality,
-            segmented=segmented,
-            write_individual_trials=True,
-        )
-
-        segmented_by_modality[modality] = segmented
-        reports.append(report)
-        print(f"{modality}: saved {len(segmented)} rows")
-
-    pd.concat(reports, ignore_index=True).to_csv(output_dir / "segmentation_report.csv", index=False)
-
-    generate_plots(output_dir, segmented_by_modality, recording_row)
-
-    print(f"Done. Results are in: {output_dir}")
-
-def run_one_recording(folder, mouse, anes, recording, stim_path, pupil_path=None, hr_rr_path=None, eeg_path=None):
+def run_one_recording(
+    folder,
+    mouse,
+    anes,
+    recording,
+    stim_path,
+    pupil_path=None,
+    hr_rr_path=None,
+    eeg_path=None,
+    nominal_duration_s=None,
+):
     import pandas as pd
 
     recording_row = pd.Series({
@@ -588,8 +607,9 @@ def run_one_recording(folder, mouse, anes, recording, stim_path, pupil_path=None
     output_dir = folder / f"segmented_output_{mouse}_{anes}_{recording.split('pupil_anesthesia-')[-1]}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    stim = prepare_stim_table(read_csv(stim_path))
+    stim = prepare_stim_table(read_csv(stim_path), nominal_duration_s=nominal_duration_s)
     stim.to_csv(output_dir / "stim_metadata.csv", index=False)
+    summarise_rejections(stim).to_csv(output_dir / "stim_quality_summary.csv", index=False)
     recording_row.to_frame().T.to_csv(output_dir / "recording_metadata.csv", index=False)
 
     reports = []

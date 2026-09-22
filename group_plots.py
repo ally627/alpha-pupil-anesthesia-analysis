@@ -3,6 +3,8 @@ import re
 
 import pandas as pd
 
+from quality_control import MIN_TRIALS_PER_CELL
+
 
 PROJECT_FOLDER = Path(".")
 COMBINED_DIR = PROJECT_FOLDER / "combined_normalized_trials"
@@ -42,6 +44,15 @@ def load_combined_files():
 
         if info is None:
             print(f"Skipping file with unexpected name: {path.name}")
+            continue
+
+        if info["n_trials"] < MIN_TRIALS_PER_CELL:
+            # A cell built from one or two surviving trials carries the same weight as a
+            # ten-trial cell once it reaches the group mean. Keep it out. See issue #12.
+            print(
+                f"Excluding {path.name}: {info['n_trials']} good trial(s), "
+                f"minimum is {MIN_TRIALS_PER_CELL}"
+            )
             continue
 
         df = pd.read_csv(path)
@@ -115,12 +126,10 @@ def draw_group_plots(data):
                 .sort_values("time_from_stim")
             )
 
-            summary["group_sd"] = summary["group_sd"].fillna(0)
-
             n_mice_freq = int(summary["n_mice"].max())
             n_trials_freq = int(summary["n_trials"].max())
 
-            label = f"{int(freq)} Hz"
+            label = f"{int(freq)} Hz (n={n_mice_freq} mice, {n_trials_freq} trials)"
 
             plt.plot(
                 summary["time_from_stim"],
@@ -129,12 +138,16 @@ def draw_group_plots(data):
                 label=label,
             )
 
-            plt.fill_between(
-                summary["time_from_stim"],
-                summary["group_mean"] - summary["group_sd"],
-                summary["group_mean"] + summary["group_sd"],
-                alpha=0.18,
-            )
+            # With a single mouse the SD is undefined. Drawing it as zero makes the least
+            # certain curve look like the most certain one, so draw no band at all.
+            if n_mice_freq > 1:
+                summary["group_sd"] = summary["group_sd"].fillna(0)
+                plt.fill_between(
+                    summary["time_from_stim"],
+                    summary["group_mean"] - summary["group_sd"],
+                    summary["group_mean"] + summary["group_sd"],
+                    alpha=0.18,
+                )
 
         plt.axhline(0, linewidth=0.8, alpha=0.6)
         plt.axvline(0, linewidth=0.8, alpha=0.6)

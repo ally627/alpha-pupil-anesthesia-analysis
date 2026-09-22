@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from quality_control import MIN_TRIALS_PER_CELL
 from segment_alpha_recording import run_one_recording
 
 
@@ -139,6 +140,8 @@ def run_all_recordings():
         if eeg_path is None:
             print("Missing eeg, will skip eeg:", results_folder)
 
+        nominal_duration_s = pd.to_numeric(row.get("duration_s"), errors="coerce")
+
         run_one_recording(
             folder=PROJECT_FOLDER,
             mouse=mouse,
@@ -148,6 +151,7 @@ def run_all_recordings():
             pupil_path=pupil_path,
             hr_rr_path=hr_rr_path,
             eeg_path=eeg_path,
+            nominal_duration_s=nominal_duration_s,
         )
 
 
@@ -221,6 +225,13 @@ def combine_same_mouse_same_anes():
             ).sort_index()
 
             n_trials = pivot.shape[1]
+
+            if n_trials < MIN_TRIALS_PER_CELL:
+                print(
+                    f"Excluding {mouse} {anes} {freq}Hz {metric['label']}: "
+                    f"{n_trials} good trial(s), minimum is {MIN_TRIALS_PER_CELL}"
+                )
+                continue
 
             pivot["mean"] = pivot.mean(axis=1)
             pivot["std"] = pivot.drop(columns=["mean"]).std(axis=1)

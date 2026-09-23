@@ -163,7 +163,7 @@ def primary_figure(grouped: pd.DataFrame, mouse_curves: pd.DataFrame, output: Pa
         ax.legend(frameon=False)
 
     axes[0].set_ylabel("Pupil diameter, change from baseline (%)")
-    fig.suptitle("Primary outcome: pupil dilation to 40 Hz and 100 Hz flicker", fontsize=15)
+    fig.suptitle("Pupil dilation in response to nociceptive stimulation", fontsize=15)
     fig.tight_layout()
     fig.savefig(output, dpi=180)
     plt.close(fig)

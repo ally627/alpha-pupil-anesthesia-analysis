@@ -1,94 +1,83 @@
-# Alpha anesthesia — 40 Hz vs 100 Hz visual stimulation
+# Pupil and physiological responses to nociceptive stimulation under isoflurane anesthesia
 
-Analysis pipeline for mouse recordings under isoflurane anesthesia. Each recording delivers
-trains of flickering light at a nominal 40 Hz or 100 Hz while EEG, pupil diameter, heart rate
-and respiration are recorded. The pipeline cuts every stimulus into a window, normalises each
-channel to its own pre-stimulus baseline, and aggregates across trials, mice and conditions.
+Analysis code for Ally Taguri's research project. Mice under isoflurane anesthesia at two
+depths (light 0.8–1.2 %, deep 1.3–1.6 %) received 1 s trains of nociceptive tail stimulation
+at 40 Hz or 100 Hz while pupil diameter, EEG, heart rate and respiration were recorded.
+The code cuts every stimulus into a window, expresses each signal relative to its own
+pre-stimulus baseline, aggregates across trials and mice, and tests the effects of
+stimulation frequency and anesthesia depth.
 
 ## Dataset
 
-- 4 mice (`NGexp9`, `NGexp10`, `NGexp12`, `NGexp13`), 15 recordings, 29 Jun – 6 Jul 2026.
-- Two anesthesia depths per mouse: `light` and `deep` (isoflurane ~0.8–1.6%).
-- Metadata: `data/alpha_recordings.csv`, `data/alpha_recordings - july.csv`.
+- 4 mice (`NGexp9`, `NGexp10`, `NGexp12`, `NGexp13`), 2 recordings per mouse per anesthesia
+  depth, except NGexp12 deep (1 recording): **15 recordings**, 12 stimuli each (6 per frequency).
+- Metadata: `data/alpha_recordings - july.csv`.
+- Raw and intermediate data (~10 GB) are **not** in this repository; they are kept in Google
+  Drive and every derived file here can be regenerated from them.
 
-Raw and segmented data are **not** in this repo — they are ~10 GB and fully regenerable.
-They live in the shared Google Drive folder `Ally's project`.
+## Analysis steps
 
-## Pipeline
+Run in this order. Every script takes `--help`.
 
-| Script | Role |
-|---|---|
-| `quality_control.py` | Stimulus-train and cell-level quality rules (see below). |
-| `rebuild_aggregates.py` | Rebuilds `combined_normalized_trials/` from existing `normalized_trials/` tables, without the raw recordings. |
-| `segment_alpha_recording.py` | Core library. Cuts −10 s → +60 s windows around each stimulus onset, normalises to the median of the 10 s pre-stimulus baseline, keeps only stimuli lasting 0.8–1.1 s, writes per-recording CSVs and plots. Also runnable as a CLI. |
-| `main.py` | Single recording, hard-coded file paths. |
-| `run_segmentation_simple.py` | Minimal single-recording entry point. |
-| `batch_run_all.py` | Iterates every row of `alpha_recordings - july.csv`, locates each recording folder, runs the segmentation, and builds `combined_normalized_trials/`. |
-| `group_plots.py` | Mean ± SD across mice per metric and anesthesia depth, 40 Hz vs 100 Hz. |
-| `summary_bar_plots.py` | Bar plots of the mean change in the 0–10 s window after stimulus onset. |
+| Step | Script | What it does |
+|---|---|---|
+| 1 | `build_curves.py` | Reads the raw files, applies stimulus quality control, cuts −20 s → +60 s around every stimulus onset and baseline-corrects each trial against the 10 s before onset. Output: one long table of per-trial curves. |
+| 2 | `noise_screening.py` | Screens the raw EEG of every trial for noise, saturation and flat segments (a check; no trials were excluded by it). |
+| 3 | `aggregate.py` | Median across trials within each mouse, then mean ± SEM across mice. Group and per-mouse curve plots. |
+| 4 | `features.py` | Reduces each trial to summary numbers (mean over 0–10 s, peak, latency) and fits the statistical model. |
+| 5 | `simple_effects.py` | The 40 vs 100 Hz effect within each anesthesia depth separately. |
+| 6 | `screen_outliers.py` | Flags trials that differ strongly from the other trials of the same mouse and condition (a check; no trials were excluded by it). |
+| 7 | `summary_figures.py`, `cross_metric_figure.py` | The figures in the thesis, including the comparison of all metrics on one scale. |
 
-## Metrics
+Shared definitions: `quality_control.py` (inclusion rules), `derived_metrics.py` (metrics and
+their units).
 
-`eeg_rel_delta`, `eeg_supp_mask_probability`, `pupil_diameter_mm`, `heart_rate_hr_bpm`,
-`respiration_resp_bpm` — all reported as percent change from each trial's own baseline,
-except the suppression probability which is a raw 0–1 value.
+## Methods in brief
 
-## Quality control
+**Stimulus quality control.** A stimulus is kept only if its duration and its delivered pulse
+rate (pulses ÷ duration) are close to the nominal values. 55 of 180 stimuli failed. A mouse
+contributes to a condition only with at least 3 good stimuli; this removed one more
+(NGexp12, deep, 40 Hz). **124 stimuli** entered the analysis.
 
-Two rules decide what enters an average, both in `quality_control.py`:
+**Units.**
+- Pupil diameter, heart rate, respiration rate: percent change from baseline.
+- Heart rate variability (SDNN: standard deviation of beat-to-beat intervals in a sliding
+  10 s window): change from baseline in **ms**, because its baseline is small enough that a
+  percent change inflates ordinary responses.
+- EEG relative delta power (already a fraction of total power): change in **percentage points**.
 
-1. **A stimulus train must be well formed.** Its duration must be within 20 % of the nominal
-   duration in `alpha_recordings.csv`, *and* the rate actually delivered (`pulse_count /
-   duration`) must be within 15 % of 40 or 100 Hz. The stimulator in this dataset sometimes
-   emitted the right number of pulses over the wrong interval, turning a "100 Hz" train into a
-   real 42 Hz one — counting pulses cannot see that. **55 of 180 trains (31 %) fail.**
-2. **A condition cell must have at least 3 good trials.** `(mouse, anesthesia, frequency,
-   metric)` cells below that are excluded and listed in `excluded_cells.csv` /
-   `cell_inventory.csv` rather than averaged in with the same weight as a ten-trial cell.
+**Stimulus artefact.** The stimulator is picked up by the EEG electrodes during the train
+(a spectral peak at the delivered pulse rate in all 15 recordings), which inflates total power
+and artificially lowers relative delta. EEG metrics therefore exclude the first 1.5 s after
+onset. Pupil, heart rate and respiration are unaffected.
 
-Rule 2 currently removes exactly one cell: **NGexp12, deep, 40 Hz**, which survived with a
-single trial because 8 of its 12 stimulus trains were mistimed (0.54–2.42 s instead of 1.0 s).
+**Aggregation.** Median across a mouse's stimuli in each condition, then mean ± SEM across mice.
 
-## Headline result (mean across mice, 0–10 s post-stimulus)
+**Statistics.** Per-trial mean change over 0–10 s, modelled with a linear mixed model
+`y ~ frequency * depth + (1 | mouse)` (statsmodels), followed by the frequency effect within
+each depth. Pupil diameter was defined in advance as the primary outcome and is reported
+without correction; the other metrics are corrected for multiple comparisons with
+Benjamini–Hochberg. α = 0.05.
 
-| Metric | light 40 Hz | light 100 Hz | deep 40 Hz | deep 100 Hz |
-|---|---|---|---|---|
-| EEG rel_delta | −23.2% | −10.5% | −33.0% | −20.6% |
-| Pupil diameter | +57.9% | +32.3% | +31.7% | +29.6% |
-| Respiration rate | +12.5% | +10.2% | +37.2% | +28.6% |
-| Heart rate | +1.2% | +0.6% | +2.0% | +1.1% |
-
-n = 4 mice everywhere except the deep / 40 Hz column, where n = 3 after the exclusion above.
-
-**40 Hz produces the stronger arousal signature in every condition.** Before quality control the
-deep / 40 Hz pupil cell read +23.3 % — below its 100 Hz counterpart — and that inversion rested
-entirely on the single mistimed-recording trial. No other cell changed.
-
-**The between-mouse spread is still large and there is no statistical testing yet** (issue #6).
-Numbers: `results/summary_bar_plots/summary_0_10s_group.csv` and `…_per_mouse.csv`.
-
-## Running it
+## Running
 
 ```bash
-pip install pandas numpy matplotlib
-python batch_run_all.py     # expects ally_pupil/ and ally_results/ beside the scripts
-python group_plots.py
-python summary_bar_plots.py
+pip install pandas numpy scipy matplotlib statsmodels
+python build_curves.py --raw <raw data folder> --output curves_per_trial.csv
+python noise_screening.py --raw <raw data folder>
+python aggregate.py
+python features.py
+python simple_effects.py
+python screen_outliers.py
+python summary_figures.py
+python cross_metric_figure.py
 ```
 
-When only the per-recording `normalized_trials/` tables are available (a few hundred MB instead
-of ~10 GB), the aggregation can be rebuilt without the raw recordings:
+Outputs are written to `results/`.
 
-```bash
-python rebuild_aggregates.py --source <folder with the segmented_output_* dirs>
-python group_plots.py
-python summary_bar_plots.py
-```
+## Older scripts
 
-## Known rough edges
-
-- `main.py` and `run_segmentation_simple.py` carry hard-coded filenames for one recording.
-- No statistical testing (issue #6); the percent-change baseline is unguarded against near-zero values (issue #4).
-- `batch_run_all.py` assumes folder names of the form `<mouse>-…-<filename>` and raises if the match is not unique.
-- No error handling around missing modalities beyond a printed skip.
-- No statistics (no per-condition test, no correction for multiple comparisons).
+`segment_alpha_recording.py`, `batch_run_all.py`, `main.py`, `run_segmentation_simple.py`,
+`rebuild_aggregates.py`, `group_plots.py`, `summary_bar_plots.py` and
+`combined_pupil_figure.py` are from the first version of the pipeline and were not used
+for the results in the thesis.

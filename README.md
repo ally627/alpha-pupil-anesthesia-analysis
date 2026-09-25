@@ -30,7 +30,8 @@ Run in this order. Every script takes `--help`.
 | 7 | `summary_figures.py`, `cross_metric_figure.py` | The figures in the thesis, including the comparison of all metrics on one scale. |
 
 Shared definitions: `quality_control.py` (inclusion rules), `derived_metrics.py` (metrics and
-their units).
+their units), `segment_alpha_recording.py` (the original segmentation code; its stimulus-table
+reader is still used by steps 1 and 2).
 
 ## Methods in brief
 
@@ -77,7 +78,8 @@ Outputs are written to `results/`.
 
 ## Older scripts
 
-`segment_alpha_recording.py`, `batch_run_all.py`, `main.py`, `run_segmentation_simple.py`,
-`rebuild_aggregates.py`, `group_plots.py`, `summary_bar_plots.py` and
-`combined_pupil_figure.py` are from the first version of the pipeline and were not used
-for the results in the thesis.
+`batch_run_all.py`, `main.py`, `run_segmentation_simple.py`, `rebuild_aggregates.py`,
+`group_plots.py`, `summary_bar_plots.py` and `combined_pupil_figure.py` are from the first
+version of the pipeline. They established the design the current steps follow (windows around
+each stimulus, baseline correction, the 0–10 s response window, 40 vs 100 Hz within each
+depth) but were not run to produce the results in the thesis.

@@ -54,10 +54,14 @@ from derived_metrics import METRIC_BY_KEY
 from quality_control import MIN_TRIALS_PER_CELL
 
 
-# The stimulus itself is visible in the raw EEG as a saturating oscillation for the whole
-# 1 s train (see noise_screening.py output). Anything computed from the EEG inside that
-# window measures the stimulator, not the brain, so the EEG metrics are blanked over it.
-# The other metrics are sampled at 10 Hz from physiological sensors and are unaffected.
+# The stimulator leaks into the EEG electrodes during the ~1 s train. Checked on all 15
+# recordings (raw 1000 Hz trace, stimulus window vs the preceding 10 s): every recording
+# shows a spectral peak at the exact delivered pulse rate (40 or 100 Hz), median 2x-5000x
+# the neighbouring bins. Strength varies by mouse: NGexp9 is gross (amplitude 2-14x
+# baseline, one recording saturated for ~half the train); the other three mice show the
+# peak with little amplitude change. Extra power at 40/100 Hz shrinks *relative* delta
+# even if the brain does nothing, so EEG metrics are blanked over the train plus 0.5 s.
+# Pupil is optical; HR and respiration come from the monitor; neither is blanked.
 ARTEFACT_BLANK_S = 1.5
 ARTEFACT_METRICS = ("eeg_rel_delta", "eeg_bsr")
 

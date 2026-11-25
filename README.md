@@ -56,9 +56,7 @@ onset. Pupil, heart rate and respiration are unaffected.
 
 **Statistics.** Per-trial mean change over 0–10 s, modelled with a linear mixed model
 `y ~ frequency * depth + (1 | mouse)` (statsmodels), followed by the frequency effect within
-each depth. Pupil diameter was defined in advance as the primary outcome and is reported
-without correction; the other metrics are corrected for multiple comparisons with
-Benjamini–Hochberg. α = 0.05.
+each depth. Pupil diameter p-values are reported without correction for multiple comparisons; the other metrics are corrected with Benjamini–Hochberg across the seven metrics within each depth. α = 0.05.
 
 ## Running
 
